@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RIS API Automation</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; background: #f4f6f8; color: #222; }
+  header { background: #0b5cad; color: #fff; padding: 12px 20px; }
+  header h1 { margin: 0; font-size: 18px; }
+  main { max-width: 1100px; margin: 16px auto; padding: 0 16px 40px; }
+  .card { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  label { font-size: 13px; color: #555; }
+  input[type=text], input[type=password] { padding: 8px; border: 1px solid #ccc; border-radius: 6px; min-width: 220px; }
+  button { padding: 8px 14px; border: 0; border-radius: 6px; background: #0b5cad; color: #fff; cursor: pointer; }
+  button.secondary { background: #5b6b7a; }
+  button:disabled { opacity: .5; cursor: default; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { border: 1px solid #e2e2e2; padding: 6px 8px; text-align: left; }
+  th { background: #eef3f7; }
+  pre { background: #101418; color: #c8e6c9; padding: 12px; border-radius: 8px; overflow: auto; max-height: 420px; font-size: 12px; }
+  .ok { color: #1a7f37; font-weight: bold; }
+  .err { color: #b42318; font-weight: bold; }
+  .hint { font-size: 12px; color: #666; }
+</style>
+</head>
+<body>
+<header><h1>RIS API Automation <span class="hint" style="color:#cfe3f5">— chạy 100% bằng REST API, không dùng browser automation</span></h1></header>
+<main>
+  <div class="card">
+    <h3>1. Đăng nhập (tài khoản bất kỳ trên Keycloak)</h3>
+    <div class="row">
+      <input id="username" type="text" placeholder="Tài khoản" autocomplete="username">
+      <input id="password" type="password" placeholder="Mật khẩu" autocomplete="current-password">
+      <button id="btnLogin">Đăng nhập</button>
+      <button id="btnLogout" class="secondary">Đăng xuất</button>
+      <span id="loginStatus" class="hint">Chưa đăng nhập</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>2. Worklist ca Chờ chụp 3 ngày gần nhất — máy Siêu âm CS1</h3>
+    <div class="row">
+      <button id="btnWorklist">Tải worklist</button>
+      <label><input id="onlyCS1" type="checkbox" checked> Chỉ máy Siêu âm CS1</label>
+      <input id="q" type="text" placeholder="Tìm kiếm thông minh: tên, mã phiếu, mã BN, dịch vụ... (không cần dấu)" style="min-width:320px">
+      <button id="btnPrev" class="secondary">‹ Trước</button>
+      <button id="btnNext" class="secondary">Sau ›</button>
+      <span id="wlInfo" class="hint"></span>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label>Mô tả <input id="description" type="text" value="." style="min-width:120px"></label>
+      <label>Kết luận <input id="conclusion" type="text" value="dịch kính vẩn đục không bong võng mạc" style="min-width:320px"></label>
+    </div>
+    <div style="margin-top:10px; overflow:auto">
+      <table>
+        <thead><tr><th>Mã phiếu</th><th>Bệnh nhân</th><th>Dịch vụ</th><th>Thiết bị</th><th>Trạng thái ảnh</th><th>Trạng thái đọc</th><th></th></tr></thead>
+        <tbody id="wlBody"><tr><td colspan="7" class="hint">Chưa tải</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>3. Chạy automation (Tiếp nhận → Xác nhận → Xem ca đọc → Khóa ca → Mô tả/Kết luận → Hoàn thành ca chụp (ký) → Duyệt)</h3>
+    <div class="row">
+      <label><input id="dryRun" type="checkbox" checked> Dry-run (chỉ đọc, không ghi)</label>
+      <label><input id="confirmOverlap" type="checkbox"> Bỏ qua cảnh báo trùng ca</label>
+      <button id="btnRunFirst">Chạy ca Chờ chụp đầu tiên</button>
+    </div>
+    <p class="hint">Mẹo: nhấn <b>Alt+T</b> để chạy ca đầu tiên. Bỏ tick dry-run mới ghi thật lên hệ thống.</p>
+    <div id="runStatus" class="hint"></div>
+    <pre id="log">Chưa chạy.</pre>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const logEl = $('log');
+
+async function api(path, opts) {
+  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+  return data;
+}
+
+function showResult(data) {
+  logEl.textContent = JSON.stringify(data, null, 2);
+}
+
+async function refreshMe() {
+  try {
+    const me = await api('/api/me');
+    $('loginStatus').textContent = 'Đã đăng nhập: ' + (me.user.name || me.user.username);
+    $('loginStatus').className = 'ok';
+  } catch {
+    $('loginStatus').textContent = 'Chưa đăng nhập';
+    $('loginStatus').className = 'hint';
+  }
+}
+
+$('btnLogin').onclick = async () => {
+  $('loginStatus').textContent = 'Đang đăng nhập...';
+  try {
+    const r = await api('/api/login', { method: 'POST', body: JSON.stringify({ username: $('username').value, password: $('password').value }) });
+    $('loginStatus').textContent = 'Đã đăng nhập: ' + (r.user.name || r.user.username);
+    $('loginStatus').className = 'ok';
+    loadWorklist();
+  } catch (e) {
+    $('loginStatus').textContent = 'Lỗi: ' + e.message;
+    $('loginStatus').className = 'err';
+  }
+};
+
+$('btnLogout').onclick = async () => { await api('/api/logout', { method: 'POST' }).catch(()=>{}); refreshMe(); };
+
+let wlPage = 1;
+const WL_PAGE_SIZE = 10;
+
+async function loadWorklist() {
+  $('wlInfo').textContent = 'Đang tải...';
+  try {
+    const wl = await api('/api/worklist?onlyCS1=' + ($('onlyCS1').checked ? '1' : '0') + '&page=' + wlPage + '&pageSize=' + WL_PAGE_SIZE + '&q=' + encodeURIComponent($('q').value.trim()));
+    const totalPages = Math.max(1, Math.ceil(wl.total / WL_PAGE_SIZE));
+    if (wlPage > totalPages) wlPage = totalPages;
+    $('wlInfo').textContent = 'Tổng ' + wl.total + ' ca'
+      + (wl.from ? ' (' + wl.from.slice(0, 10) + ' → ' + wl.to.slice(0, 10) + ')' : '')
+      + ' — trang ' + wlPage + '/' + totalPages;
+    const tb = $('wlBody');
+    tb.innerHTML = '';
+    for (const s of wl.items) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${s.orderNumber || ''}</td><td>${s.patientName || ''}</td><td>${s.procedure || ''}</td><td>${s.deviceName || ''}</td><td>${s.imageStatus || ''}</td><td>${s.readStatus || ''}</td>`;
+      const td = document.createElement('td');
+      const btn = document.createElement('button');
+      btn.textContent = 'Chạy';
+      btn.onclick = () => runCase(s.id);
+      td.appendChild(btn);
+      tr.appendChild(td);
+      tb.appendChild(tr);
+    }
+    if (!wl.items.length) tb.innerHTML = '<tr><td colspan="7" class="hint">Trống</td></tr>';
+  } catch (e) {
+    $('wlInfo').textContent = 'Lỗi: ' + e.message;
+    $('wlInfo').className = 'err';
+  }
+}
+$('btnWorklist').onclick = () => { wlPage = 1; loadWorklist(); };
+$('btnPrev').onclick = () => { if (wlPage > 1) { wlPage--; loadWorklist(); } };
+$('btnNext').onclick = () => { wlPage++; loadWorklist(); };
+let qTimer = null;
+$('q').addEventListener('input', () => {
+  clearTimeout(qTimer);
+  qTimer = setTimeout(() => { wlPage = 1; loadWorklist(); }, 350);
+});
+$('onlyCS1').addEventListener('change', () => { wlPage = 1; loadWorklist(); });
+
+async function runCase(studyId) {
+  $('runStatus').textContent = 'Đang chạy' + (studyId ? ' ca ' + studyId : ' ca đầu tiên') + '...';
+  $('runStatus').className = 'hint';
+  try {
+    const r = await api('/api/run', { method: 'POST', body: JSON.stringify({
+      studyId: studyId || null,
+      description: $('description').value,
+      conclusion: $('conclusion').value,
+      dryRun: $('dryRun').checked,
+      confirmOverlap: $('confirmOverlap').checked,
+      onlyCS1: $('onlyCS1').checked,
+    })});
+    $('runStatus').textContent = r.dryRun ? 'Dry-run xong (không ghi gì).' : 'Hoàn tất ghi thật.';
+    $('runStatus').className = 'ok';
+    showResult(r);
+    loadWorklist();
+  } catch (e) {
+    $('runStatus').textContent = 'Lỗi: ' + e.message;
+    $('runStatus').className = 'err';
+    logEl.textContent = e.message;
+  }
+}
+$('btnRunFirst').onclick = () => runCase(null);
+
+document.addEventListener('keydown', (e) => {
+  if (e.altKey && (e.key === 't' || e.key === 'T' || e.code === 'KeyT')) {
+    e.preventDefault();
+    runCase(null);
+  }
+});
+
+refreshMe();
+</script>
+</body>
+</html>

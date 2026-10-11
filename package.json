@@ -1,0 +1,10 @@
+{
+  "name": "ris-api-app",
+  "version": "1.0.0",
+  "description": "RIS PACS-AI automation qua REST API (Keycloak OIDC + ris-api), chạy trên port 8000",
+  "main": "server.cjs",
+  "scripts": {
+    "start": "node server.cjs"
+  },
+  "license": "ISC"
+}
